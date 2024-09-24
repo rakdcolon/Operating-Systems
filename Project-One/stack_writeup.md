@@ -1,0 +1,9 @@
+Project Group NetID and Names: Sankar Gollapudi (sag341), Rohan Karamel (rak218)
+Sankar Gollapudi did this stack project
+
+1. What are the contents in the stack? Feel free to describe your understanding.
+    The stack contains many things including, but not limited, registers, variables, and arguments to pass into function calls. RSP, the stack pointer, points to the bottom of the stack (which is the front as the stack grows down), and RBP, the base pointer, points to the top of the stop (or the back), which allows RSP to reset and allocate an appropriate amount of memory in the stack upon a function call. 
+2. Where is the program counter, and how did you use GDB to locate the PC?
+    The program counter is usually saved in EIP/ RIP, or the instruction pointer (same register one is just 32-bit/ 64-bit). In this case EIP was pushed to the stack during the 5 length instruction CALL. I could be wrong, but using this assumption I used x/10gx around $rbp and $rsp to look for a piece of memory that held 0x56556265, the return pointer.
+3. What were the changes to get the desired result?
+    First we found the location of our stackno on the stack (&stackno). Then we create a pointer to this pointer so that we can offset it by an appropriate amount on the stack. If we don't create a pointer then it might not necessarily offset, and instead affect the memory location of the pointer itself instead of shifting location. We offset the pointer to the pointer, and then derefernce this to edit the memory address at that location (Program counter) by adding 2 to skip to the next instruction in assembly.
