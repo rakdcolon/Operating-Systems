@@ -1,5 +1,5 @@
 # Bit Operations Writeup
-Group: Sankar Gollapudi and Rohan Karamel. Both `bitops.c` and `threads.c` were completed by Rohan Karamel.
+Group: Sankar Gollapudi(SAG341) and Rohan Karamel(RAK218). Both `bitops.c` and `threads.c` were completed by Rohan Karamel.
 
 ## 1. Extracting the Top Bits: get_top_bits
 
