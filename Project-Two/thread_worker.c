@@ -16,55 +16,59 @@ double avg_resp_time=0;
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
 // YOUR CODE HERE
 
+// Queue for the runqueue
+queue_t *runqueue;
+
 
 /* create a new thread */
-int worker_create(worker_t * thread, pthread_attr_t * attr, void *(*function)(void*), void * arg) 
-{
-    tcb *threadControlBlock = (tcb *)malloc(sizeof(tcb)); // Create a new thread control block
-
-    // Check if the memory allocation was successful
-    if (threadControlBlock == NULL) 
-    {
-        perror("Error: Memory allocation for thread control block failed");
-        return -1;
+int worker_create(worker_t *thread, pthread_attr_t *attr, void *(*function)(void *), void *arg) {
+    // Allocate memory for the TCB (Thread Control Block)
+    tcb *new_thread = (tcb *)malloc(sizeof(tcb));
+    if (new_thread == NULL) {
+		printf("Error: Memory allocation failed for thread.\n");
+        return -1;  
     }
 
-    ucontext_t *context = &(threadControlBlock->t_context); // Get the context of this worker thread
+    // Initialize the TCB
+    new_thread->t_id = (worker_t)syscall(SYS_gettid);  // Assign a unique thread ID
+    new_thread->t_status = THREAD_NEW;  // Mark thread as new
+    new_thread->t_priority = DEFAULT_PRIO;  // Set default priority
 
-    // Check if the context of this worker thread was successful
-    if (getcontext(context) == -1)
-    {
-        perror("Error: Getting context of worker thread failed");
-        free(threadControlBlock); // Free allocated memory on error
-        return -1;
+    // Get the current context and prepare for the new thread
+    if (getcontext(&(new_thread->t_context)) == -1) {
+        free(new_thread);
+		printf("Error: Could not get context.\n");
+        return -1;  // Return error if context cannot be retrieved
     }
 
-    stack_t *stack = &((*context).uc_stack); // Get the stack pointer from the context
-    void *stackPointer = malloc(STACKSIZE); // Allocate memory for the stack
-
-    // Check if the memory allocation was successful
-    if (stackPointer == NULL)
-    {
-        perror("Error: Memory allocation for stack failed");
-        free(threadControlBlock); // Free allocated memory on error
-        return -1;
+    // Allocate memory for the thread stack
+    new_thread->t_stack = malloc(STACKSIZE);
+    if (new_thread->t_stack == NULL) {
+        free(new_thread);
+		printf("Error: Memory allocation failed for thread stack.\n");
+        return -1;  // Return error if stack allocation fails
     }
 
-    stack->ss_sp = stackPointer; // Assign the stack pointer
-    stack->ss_size = STACKSIZE; // Set the stack size
-    context->uc_link = NULL; // Set the link to the next context switch as NULL
+    // Set up the thread's context
+    new_thread->t_context.uc_stack.ss_sp = new_thread->t_stack;
+    new_thread->t_context.uc_stack.ss_size = STACKSIZE;
+    new_thread->t_context.uc_stack.ss_flags = 0;
+    new_thread->t_context.uc_link = NULL;  // Set to NULL to indicate no linked context
 
-    makecontext(context, (void (*)(void))function, 1, arg); // Corrected use of context
+    // Make the context to point to the function to be executed by the thread
+    makecontext(&(new_thread->t_context), (void (*)(void))function, 1, arg);
 
-    enqueue_thread(threadControlBlock); // Enqueue the thread for scheduling
+    // Add the new thread to the scheduler's runqueue
+    enqueue(runqueue, new_thread);
 
-	*thread = (worker_t)threadControlBlock; // Set the thread ID
+    // Assign the thread ID to the provided thread pointer
+    *thread = new_thread->t_id;
 
-	// TODO:Initialize other fields of the thread control block
+    // Set thread status to RUNNABLE
+    new_thread->t_status = THREAD_RUNNABLE;
 
-
-    return 0;
-};
+    return 0;  // Return success
+}
 
 #ifdef MLFQ
 /* This function gets called only for MLFQ scheduling set the worker priority. */
