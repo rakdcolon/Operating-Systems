@@ -47,7 +47,9 @@ typedef struct TCB {
 /* mutex struct definition */
 typedef struct worker_mutex_t {
 	/* add something here */
-	
+	int locked;
+	worker_t owner;
+
 	// YOUR CODE HERE
 } worker_mutex_t;
 
@@ -63,6 +65,56 @@ typedef struct worker_mutex_t {
 // Feel free to add your own auxiliary data structures (linked list or queue etc...)
 
 // YOUR CODE HERE
+#define HASH_SIZE 1000
+
+int hash(worker_t id){
+	// I doubt that the number of threads will exceed 100 so having a simple hash function like this
+	// maintains a low but linear chance of collisions. The fact that each has its own unique id should help.
+	return id % HASH_SIZE;
+}
+
+
+int insertHash(worker_t id, tcb* thread_block){
+	int index = hash(id);
+	int start = index;
+	while (thread_map[index] != NULL){
+		index = (index + 1)%HASH_SIZE;
+		if(start == index){
+			printf("ERROR: Not enough space! Can't insert.\n");
+			return 1;	// return fail
+		}
+	}
+	thread_map[index] = thread_block;
+	return 0; // return success
+}
+
+tcb* find(worker_t id){
+	int index = hash(id);
+	int start = index;
+	while (thread_map[index]->t_id != id){
+		index = (index+1) % HASH_SIZE;
+		if (start == index){
+			printf("ERROR: Thread not found in data structure.\n");
+			return NULL;
+		}
+	}
+	return thread_map[index];
+}
+
+int deleteHash(worker_t id){
+	int index = hash(id);
+	int start = index;
+	while (thread_map[index]->t_id != id){
+		index = (index+1) % HASH_SIZE;
+		if (start == index){
+			printf("ERROR: Thread not found in data structure.\n");
+			return 1; // return fail
+		}
+	}
+	thread_map[index] = NULL;
+	return 0; // return success
+}
+
 typedef struct node_t {
 	void* data;
 	struct node_t* next;
@@ -106,26 +158,32 @@ void enqueue(queue_t* q,void* data){
 }
 
 void* dequeue(queue_t* q){
+	node_t* tempNode;
 	if (q->size == 0){
 		printf("Queue is empty!\n");
 		return NULL;
 	}
 	void* data = q->head->data;
+	tempNode = q->head;
 	q->head = q->head->next;
 	if(q->head == NULL){
 		q->end = NULL;
 	}
 	q->size -= 1;
+	free(tempNode);
 	return data;
 }
 
 void* top(queue_t* q){
-	return q->head;
+	if(q->head == NULL){
+		return NULL;
+	}
+	return q->head->data;
 }
 
 void freeQueue(queue_t* q){
 	node_t* tempNode;
-	while(top(q) != NULL){
+	while(q->head != NULL){
 		tempNode = dequeue(q);
 		free(tempNode->data);
 		free(tempNode);
