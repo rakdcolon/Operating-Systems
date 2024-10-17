@@ -66,7 +66,8 @@ typedef struct worker_mutex_t {
 
 // YOUR CODE HERE
 #define HASH_SIZE 1000
-
+// Hash Map to store thread control blocks with (optimally) O(1) find
+tcb* thread_map[HASH_SIZE];
 int hash(worker_t id){
 	// I doubt that the number of threads will exceed 100 so having a simple hash function like this
 	// maintains a low but linear chance of collisions. The fact that each has its own unique id should help.
@@ -91,7 +92,7 @@ int insertHash(worker_t id, tcb* thread_block){
 tcb* find(worker_t id){
 	int index = hash(id);
 	int start = index;
-	while (thread_map[index]->t_id != id){
+	while (thread_map[index] != NULL && thread_map[index]->t_id != id){
 		index = (index+1) % HASH_SIZE;
 		if (start == index){
 			printf("ERROR: Thread not found in data structure.\n");
@@ -104,7 +105,7 @@ tcb* find(worker_t id){
 int deleteHash(worker_t id){
 	int index = hash(id);
 	int start = index;
-	while (thread_map[index]->t_id != id){
+	while (thread_map[index] != NULL && thread_map[index]->t_id != id){
 		index = (index+1) % HASH_SIZE;
 		if (start == index){
 			printf("ERROR: Thread not found in data structure.\n");
