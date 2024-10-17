@@ -19,55 +19,125 @@ double avg_resp_time=0;
 // Queue for the runqueue
 queue_t *runqueue;
 
+runqueue_t runqueue = {NULL, NULL, 0};
+
+/* Function to add a thread to the runqueue */
+void enqueue(tcb *new_tcb) 
+{
+    new_tcb->next = NULL;
+
+    if (runqueue.tail == NULL) 
+    {
+        // Runqueue is empty
+        runqueue.head = new_tcb;
+        runqueue.tail = new_tcb;
+    } 
+    else 
+    {
+        // Add to the end of the runqueue
+        runqueue.tail->next = new_tcb;
+        runqueue.tail = new_tcb;
+    }
+    
+    runqueue.size++;
+}
+
+/* Function to remove the head thread from the runqueue */
+tcb* dequeue()
+{
+    if (runqueue.head == NULL) 
+    {
+        return NULL;
+    }
+
+    tcb *removed_tcb = runqueue.head;
+    runqueue.head = runqueue.head->next;
+
+    if (runqueue.head == NULL) 
+    {
+        runqueue.tail = NULL;
+    }
+
+    runqueue.size--;
+    return removed_tcb;
+}
 
 /* create a new thread */
-int worker_create(worker_t *thread, pthread_attr_t *attr, void *(*function)(void *), void *arg) {
-    // Allocate memory for the TCB (Thread Control Block)
-    tcb *new_thread = (tcb *)malloc(sizeof(tcb));
-    if (new_thread == NULL) {
-		printf("Error: Memory allocation failed for thread.\n");
-        return -1;  
+int worker_create(worker_t *thread, pthread_attr_t *attr, void *(*function)(void *), void *arg) 
+{
+    // Allocate memory for the new TCB
+    tcb *new_tcb = (tcb *)malloc(sizeof(tcb));
+    if (new_tcb == NULL) 
+    {
+        perror("Failed to allocate memory for TCB");
+        return -1;
     }
 
-    // Initialize the TCB
-    new_thread->t_id = (worker_t)syscall(SYS_gettid);  // Assign a unique thread ID
-    new_thread->t_status = THREAD_NEW;  // Mark thread as new
-    new_thread->t_priority = DEFAULT_PRIO;  // Set default priority
+    // Assign a unique thread ID
+    static worker_t next_id = 1;
+    new_tcb->id = next_id++;
+    *thread = new_tcb->id;
 
-    // Get the current context and prepare for the new thread
-    if (getcontext(&(new_thread->t_context)) == -1) {
-        free(new_thread);
-		printf("Error: Could not get context.\n");
-        return -1;  // Return error if context cannot be retrieved
+    // Set thread state to READY
+    new_tcb->state = READY;
+
+    // Allocate stack for the thread
+    new_tcb->stack = malloc(STACKSIZE);
+    if (new_tcb->stack == NULL) 
+    {
+        perror("Failed to allocate stack for thread");
+        free(new_tcb);
+        return -1;
     }
 
-    // Allocate memory for the thread stack
-    new_thread->t_stack = malloc(STACKSIZE);
-    if (new_thread->t_stack == NULL) {
-        free(new_thread);
-		printf("Error: Memory allocation failed for thread stack.\n");
-        return -1;  // Return error if stack allocation fails
+    // Initialize the thread context
+    if (getcontext(&new_tcb->context) == -1) 
+    {
+        perror("Failed to get context");
+        free(new_tcb->stack);
+        free(new_tcb);
+        return -1;
     }
 
-    // Set up the thread's context
-    new_thread->t_context.uc_stack.ss_sp = new_thread->t_stack;
-    new_thread->t_context.uc_stack.ss_size = STACKSIZE;
-    new_thread->t_context.uc_stack.ss_flags = 0;
-    new_thread->t_context.uc_link = NULL;  // Set to NULL to indicate no linked context
+    // Set up the new context
+    new_tcb->context.uc_stack.ss_sp = new_tcb->stack;
+    new_tcb->context.uc_stack.ss_size = STACKSIZE;
+    new_tcb->context.uc_link = NULL; // When the thread finishes, there's no continuation context
 
-    // Make the context to point to the function to be executed by the thread
-    makecontext(&(new_thread->t_context), (void (*)(void))function, 1, arg);
+    // Make the context run the given function
+    makecontext(&new_tcb->context, (void (*)(void))function, 1, arg);
 
-    // Add the new thread to the scheduler's runqueue
-    enqueue(runqueue, new_thread);
+    // Add the new thread to the runqueue
+    enqueue(new_tcb);
 
-    // Assign the thread ID to the provided thread pointer
-    *thread = new_thread->t_id;
+    return 0;
+}
 
-    // Set thread status to RUNNABLE
-    new_thread->t_status = THREAD_RUNNABLE;
+/* yield the CPU to another thread */
+int worker_yield() 
+{
+    tcb *current_tcb = dequeue();
+    if (current_tcb == NULL) return -1; // No threads available to yield to
 
-    return 0;  // Return success
+    // Add the current thread back to the end of the runqueue
+    enqueue(current_tcb);
+
+    // Get the next thread from the runqueue
+    tcb *next_tcb = runqueue.head;
+    if (next_tcb == NULL) return -1; // No threads to schedule
+
+    // Set the current thread state to READY and the next thread state to RUNNING
+    current_tcb->state = READY;
+    next_tcb->state = RUNNING;
+
+    // Swap context to the next thread
+    if (swapcontext(&current_tcb->context, &next_tcb->context) == -1) 
+    {
+        perror("Failed to swap context");
+        return -1;
+    }
+
+    return 0;
 }
 
 #ifdef MLFQ
@@ -82,18 +152,6 @@ int worker_setschedprio(worker_t thread, int prio) {
 
 }
 #endif
-
-/* give CPU possession to other user-level worker threads voluntarily */
-int worker_yield() {
-	
-	// - change worker thread's state from Running to Ready
-	// - save context of this thread to its thread control block
-	// - switch from thread context to scheduler context
-
-	// YOUR CODE HERE
-	
-	return 0;
-};
 
 /* terminate a thread */
 void worker_exit(void *value_ptr) {
