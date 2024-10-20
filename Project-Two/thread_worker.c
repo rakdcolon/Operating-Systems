@@ -15,57 +15,25 @@ double avg_resp_time=0;
 
 // INITAILIZE ALL YOUR OTHER VARIABLES HERE
 // YOUR CODE HERE
-
-// Queue for the runqueue
-queue_t *runqueue;
-
-runqueue_t runqueue = {NULL, NULL, 0};
+/* Runqueue definition */
+queue_t* runqueue;
 
 /* Function to add a thread to the runqueue */
-void enqueue(tcb *new_tcb) 
+void add_to_runqueue(tcb *new_tcb) 
 {
-    new_tcb->next = NULL;
-
-    if (runqueue.tail == NULL) 
-    {
-        // Runqueue is empty
-        runqueue.head = new_tcb;
-        runqueue.tail = new_tcb;
-    } 
-    else 
-    {
-        // Add to the end of the runqueue
-        runqueue.tail->next = new_tcb;
-        runqueue.tail = new_tcb;
-    }
-    
-    runqueue.size++;
+    enqueue(runqueue, new_tcb);
 }
 
 /* Function to remove the head thread from the runqueue */
-tcb* dequeue()
+tcb* remove_from_runqueue() 
 {
-    if (runqueue.head == NULL) 
-    {
-        return NULL;
-    }
-
-    tcb *removed_tcb = runqueue.head;
-    runqueue.head = runqueue.head->next;
-
-    if (runqueue.head == NULL) 
-    {
-        runqueue.tail = NULL;
-    }
-
-    runqueue.size--;
-    return removed_tcb;
+    return (tcb*)dequeue(runqueue);
 }
 
 /* create a new thread */
 int worker_create(worker_t *thread, pthread_attr_t *attr, void *(*function)(void *), void *arg) 
 {
-    // Allocate memory for the new TCB
+    // Allocate memory for TCB
     tcb *new_tcb = (tcb *)malloc(sizeof(tcb));
     if (new_tcb == NULL) 
     {
@@ -73,42 +41,39 @@ int worker_create(worker_t *thread, pthread_attr_t *attr, void *(*function)(void
         return -1;
     }
 
-    // Assign a unique thread ID
+    // Assign ID
     static worker_t next_id = 1;
-    new_tcb->id = next_id++;
-    *thread = new_tcb->id;
+    new_tcb->t_id = next_id++;
+    *thread = new_tcb->t_id;
 
-    // Set thread state to READY
-    new_tcb->state = READY;
+    new_tcb->t_status = THREAD_RUNNABLE;
 
     // Allocate stack for the thread
-    new_tcb->stack = malloc(STACKSIZE);
-    if (new_tcb->stack == NULL) 
+    new_tcb->t_stack = malloc(SIGSTKSZ);
+    if (new_tcb->t_stack == NULL) 
     {
         perror("Failed to allocate stack for thread");
         free(new_tcb);
         return -1;
     }
 
-    // Initialize the thread context
-    if (getcontext(&new_tcb->context) == -1) 
+    // Initialize context
+    if (getcontext(&new_tcb->t_context) == -1) 
     {
         perror("Failed to get context");
-        free(new_tcb->stack);
+        free(new_tcb->t_stack);
         free(new_tcb);
         return -1;
     }
 
-    // Set up the new context
-    new_tcb->context.uc_stack.ss_sp = new_tcb->stack;
-    new_tcb->context.uc_stack.ss_size = STACKSIZE;
-    new_tcb->context.uc_link = NULL; // When the thread finishes, there's no continuation context
+    // Set up new context
+    new_tcb->t_context.uc_stack.ss_sp = new_tcb->t_stack;
+    new_tcb->t_context.uc_stack.ss_size = SIGSTKSZ;
+    new_tcb->t_context.uc_link = NULL;
 
-    // Make the context run the given function
-    makecontext(&new_tcb->context, (void (*)(void))function, 1, arg);
-
-    // Add the new thread to the runqueue
-    enqueue(new_tcb);
+    // Make the context run and add the new thread to the runqueue
+    makecontext(&new_tcb->t_context, (void (*)(void))function, 1, arg);
+    add_to_runqueue(new_tcb);
 
     return 0;
 }
@@ -116,26 +81,67 @@ int worker_create(worker_t *thread, pthread_attr_t *attr, void *(*function)(void
 /* yield the CPU to another thread */
 int worker_yield() 
 {
-    tcb *current_tcb = dequeue();
-    if (current_tcb == NULL) return -1; // No threads available to yield to
+    tcb *current_tcb = remove_from_runqueue();
+    if (current_tcb == NULL) return -1; 
 
     // Add the current thread back to the end of the runqueue
-    enqueue(current_tcb);
+    add_to_runqueue(current_tcb);
 
     // Get the next thread from the runqueue
-    tcb *next_tcb = runqueue.head;
-    if (next_tcb == NULL) return -1; // No threads to schedule
+    tcb *next_tcb = (tcb *)top(runqueue);
+    if (next_tcb == NULL) return -1; 
 
-    // Set the current thread state to READY and the next thread state to RUNNING
-    current_tcb->state = READY;
-    next_tcb->state = RUNNING;
+    // Set the current thread state to THREAD_RUNNABLE
+    current_tcb->t_status = THREAD_RUNNABLE;
+
+    // Set the next thread state to THREAD_RUNNABLE
+    next_tcb->t_status = THREAD_RUNNABLE;
 
     // Swap context to the next thread
-    if (swapcontext(&current_tcb->context, &next_tcb->context) == -1) 
+    if (swapcontext(&current_tcb->t_context, &next_tcb->t_context) == -1) 
     {
         perror("Failed to swap context");
         return -1;
     }
+
+    return 0;
+}
+
+/* terminate a thread */
+void worker_exit(void *value_ptr) 
+{
+    tcb *current_tcb = (tcb *)top(runqueue);
+    if (current_tcb == NULL) return;
+
+    // Set the thread state to THREAD_BLOCKED
+    current_tcb->t_status = THREAD_BLOCKED;
+
+    // Free the stack memory and TCB
+    free(current_tcb->t_stack);
+    free(current_tcb);
+
+    // Remove from hash map
+    deleteHash(current_tcb->t_id);
+
+    // Get the next thread from the runqueue
+    tcb *next_tcb = (tcb *)dequeue(runqueue);
+    if (next_tcb != NULL) 
+    {
+        next_tcb->t_status = THREAD_RUNNABLE;
+        setcontext(&next_tcb->t_context); // Switch to the next thread's context
+    }
+
+    exit(0);
+}
+
+/* wait for thread termination */
+int worker_join(worker_t thread, void **value_ptr) 
+{
+    tcb *target_tcb = find(thread);
+    if (target_tcb == NULL) return -1;
+
+    // Wait until the target thread is terminated
+    while (target_tcb->t_status != THREAD_BLOCKED) worker_yield();
 
     return 0;
 }
@@ -152,24 +158,6 @@ int worker_setschedprio(worker_t thread, int prio) {
 
 }
 #endif
-
-/* terminate a thread */
-void worker_exit(void *value_ptr) {
-	// - de-allocate any dynamic memory created when starting this thread
-
-	// YOUR CODE HERE
-};
-
-
-/* Wait for thread termination */
-int worker_join(worker_t thread, void **value_ptr) {
-	
-	// - wait for a specific thread to terminate
-	// - de-allocate any dynamic memory created by the joining thread
-  
-	// YOUR CODE HERE
-	return 0;
-};
 
 /* initialize the mutex lock */
 int worker_mutex_init(worker_mutex_t *mutex, 
