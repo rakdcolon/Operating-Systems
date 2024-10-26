@@ -1,9 +1,3 @@
-// File:	worker_t.h
-
-// List all group member's name:
-// username of iLab:
-// iLab Server:
-
 #ifndef WORKER_T_H
 #define WORKER_T_H
 
@@ -12,215 +6,104 @@
 /* To use Linux pthread Library in Benchmark, you have to comment the USE_WORKERS macro */
 #define USE_WORKERS 1
 
-/* include lib header files that you need here: */
+/* Include necessary header files */
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <ucontext.h>
+#include <signal.h>
+#include <sys/time.h>
 #include <string.h>
+#include <errno.h>
+#include <stdint.h>
 
-typedef uint worker_t;
+typedef uint32_t worker_t;
 
-typedef enum {
-	THREAD_NEW,
-	THREAD_RUNNABLE,
-	THREAD_BLOCKED,
-	THREAD_WAITING,
-} thread_status_t;
-
-typedef struct TCB {
-	/* add important states in a thread control block */
-	worker_t t_id;
-	// status can be any one of the enumerated values above
-	thread_status_t t_status;
-	ucontext_t t_context;
-	void* t_stack;
-	int t_priority;
-	// And more ...
-
-	// YOUR CODE HERE
-	
-} tcb; 
-
-/* mutex struct definition */
-typedef struct worker_mutex_t {
-	/* add something here */
-	int locked;
-	worker_t owner;
-
-	// YOUR CODE HERE
-} worker_mutex_t;
+/* Thread states */
+#define READY 0
+#define RUNNING 1
+#define BLOCKED 2
+#define EXITED 3
 
 /* Priority definitions */
 #define NUMPRIO 4
-
 #define HIGH_PRIO 3
 #define MEDIUM_PRIO 2
 #define DEFAULT_PRIO 1
 #define LOW_PRIO 0
 
-/* define your data structures here: */
-// Feel free to add your own auxiliary data structures (linked list or queue etc...)
+/* Thread Control Block */
+typedef struct TCB {
+    worker_t thread_id;          // Thread ID
+    int status;                  // Thread status
+    ucontext_t context;          // Thread context
+    void* stack;                 // Stack pointer
+    int priority;                // Thread priority
+    void* retval;                // Return value
+    struct TCB* next;            // Pointer to next TCB in queue
+    struct TCB* all_next;        // Pointer to next TCB in all threads list
+    struct timeval creation_time;        // Time when thread was created
+    struct timeval first_scheduled_time; // Time when thread was first scheduled
+    struct timeval end_time;             // Time when thread exited
+    int first_scheduled;         // Flag to indicate if first scheduled
+    long elapsed_time;           // Total execution time
+} tcb;
 
-// YOUR CODE HERE
-#define HASH_SIZE 1000
-// Hash Map to store thread control blocks with (optimally) O(1) find
-tcb* thread_map[HASH_SIZE];
-int hash(worker_t id){
-	// I doubt that the number of threads will exceed 100 so having a simple hash function like this
-	// maintains a low but linear chance of collisions. The fact that each has its own unique id should help.
-	return id % HASH_SIZE;
-}
+/* Mutex struct definition */
+typedef struct worker_mutex_t {
+    int locked;                  // Mutex lock flag
+    tcb* owner;                  // Owner of the mutex
+    tcb* wait_queue;             // Queue of threads waiting for the mutex
+} worker_mutex_t;
 
+/* Runqueue definition */
+typedef struct runqueue_t {
+    tcb* head;
+    tcb* tail;
+} runqueue_t;
 
-int insertHash(worker_t id, tcb* thread_block){
-	int index = hash(id);
-	int start = index;
-	while (thread_map[index] != NULL){
-		index = (index + 1)%HASH_SIZE;
-		if(start == index){
-			printf("ERROR: Not enough space! Can't insert.\n");
-			return 1;	// return fail
-		}
-	}
-	thread_map[index] = thread_block;
-	return 0; // return success
-}
+/* Multi-level feedback queue */
+#define MAX_LEVELS NUMPRIO
 
-tcb* find(worker_t id){
-	int index = hash(id);
-	int start = index;
-	while (thread_map[index] != NULL && thread_map[index]->t_id != id){
-		index = (index+1) % HASH_SIZE;
-		if (start == index){
-			printf("ERROR: Thread not found in data structure.\n");
-			return NULL;
-		}
-	}
-	return thread_map[index];
-}
+typedef struct mlfq_t {
+    runqueue_t queues[MAX_LEVELS];
+} mlfq_t;
 
-int deleteHash(worker_t id){
-	int index = hash(id);
-	int start = index;
-	while (thread_map[index] != NULL && thread_map[index]->t_id != id){
-		index = (index+1) % HASH_SIZE;
-		if (start == index){
-			printf("ERROR: Thread not found in data structure.\n");
-			return 1; // return fail
-		}
-	}
-	thread_map[index] = NULL;
-	return 0; // return success
-}
+/* Function Declarations */
 
-typedef struct node_t {
-	void* data;
-	struct node_t* next;
-} node_t;
+/* Create a new thread */
+int worker_create(worker_t* thread, pthread_attr_t* attr, void* (*function)(void*), void* arg);
 
-typedef struct queue_t {
-	struct node_t* head;
-	struct node_t* end;
-	int size;
-	size_t dataSize;
-} queue_t;
-
-/* Function Declarations: */
-node_t* makeNode(void* data, size_t dataSize){
-	node_t* newNode = (node_t*)malloc(sizeof(node_t));
-	newNode->data = malloc(dataSize); // allocate memory for data
-	memcpy(newNode->data, data, dataSize); // copy data into node
-	newNode->next = NULL;
-	return newNode;
-}
-
-queue_t* makeQueue(size_t dS){
-	queue_t* q = (queue_t*)malloc(sizeof(queue_t));
-	q->head = NULL;
-	q->end = NULL;
-	q->size = 0;
-	q->dataSize = dS;
-	return q;
-}
-
-void enqueue(queue_t* q,void* data){
-	node_t* newNode = makeNode(data, q->dataSize);
-	if (q->size == 0){
-		q->head = newNode;
-		q->end = newNode;
-	} else{
-		q->end->next = newNode;
-		q->end = newNode;
-	}
-	q->size += 1;
-}
-
-void* dequeue(queue_t* q){
-	node_t* tempNode;
-	if (q->size == 0){
-		printf("Queue is empty!\n");
-		return NULL;
-	}
-	void* data = q->head->data;
-	tempNode = q->head;
-	q->head = q->head->next;
-	if(q->head == NULL){
-		q->end = NULL;
-	}
-	q->size -= 1;
-	free(tempNode);
-	return data;
-}
-
-void* top(queue_t* q){
-	if(q->head == NULL){
-		return NULL;
-	}
-	return q->head->data;
-}
-
-void freeQueue(queue_t* q){
-	node_t* tempNode;
-	while(q->head != NULL){
-		tempNode = dequeue(q);
-		free(tempNode->data);
-		free(tempNode);
-	}
-	free(q);
-}
-
-/* create a new thread */
-int worker_create(worker_t * thread, pthread_attr_t * attr, void
-    *(*function)(void*), void * arg);
-
-/* give CPU pocession to other user level worker threads voluntarily */
+/* Yield CPU possession voluntarily */
 int worker_yield();
 
-/* terminate a thread */
-void worker_exit(void *value_ptr);
+/* Terminate a thread */
+void worker_exit(void* value_ptr);
 
-/* wait for thread termination */
-int worker_join(worker_t thread, void **value_ptr);
+/* Wait for thread termination */
+int worker_join(worker_t thread, void** value_ptr);
 
-/* initial the mutex lock */
-int worker_mutex_init(worker_mutex_t *mutex, const pthread_mutexattr_t
-    *mutexattr);
+/* Initialize the mutex lock */
+int worker_mutex_init(worker_mutex_t* mutex, const pthread_mutexattr_t* mutexattr);
 
-/* aquire the mutex lock */
-int worker_mutex_lock(worker_mutex_t *mutex);
+/* Acquire the mutex lock */
+int worker_mutex_lock(worker_mutex_t* mutex);
 
-/* release the mutex lock */
-int worker_mutex_unlock(worker_mutex_t *mutex);
+/* Release the mutex lock */
+int worker_mutex_unlock(worker_mutex_t* mutex);
 
-/* destroy the mutex */
-int worker_mutex_destroy(worker_mutex_t *mutex);
+/* Destroy the mutex */
+int worker_mutex_destroy(worker_mutex_t* mutex);
 
-
-/* Function to print global statistics. Do not modify this function.*/
+/* Function to print global statistics. Do not modify this function. */
 void print_app_stats(void);
+
+/* Set thread priority (for MLFQ scheduling) */
+#ifdef MLFQ
+int worker_setschedprio(worker_t thread, int prio);
+#endif
 
 #ifdef USE_WORKERS
 #define pthread_t worker_t
@@ -234,5 +117,19 @@ void print_app_stats(void);
 #define pthread_mutex_destroy worker_mutex_destroy
 #define pthread_setschedprio worker_setschedprio
 #endif
+
+/* Forward declarations */
+static void threading_init();
+static tcb* find_thread_by_id(worker_t thread_id);
+static void schedule();
+static void sched_psjf();
+static void sched_mlfq();
+static void timer_handler(int signum);
+static void enqueue_thread(tcb* thread);
+static tcb* dequeue_thread();
+static void enqueue_thread_mlfq(tcb* thread);
+static tcb* dequeue_thread_mlfq(int level);
+static int all_queues_empty();
+static void refresh_priorities();
 
 #endif
